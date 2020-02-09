@@ -29,6 +29,7 @@ class Ui(QtWidgets.QMainWindow):
         self.is_at_r3d_load = False
         self.is_at_xz_load = False
         self.is_at_sras_load = False
+        self.is_in_automode = False
 
         # signal and slot definitions
         self.button_comconnect.clicked.connect(self.connect_com_port)
@@ -166,6 +167,7 @@ class Ui(QtWidgets.QMainWindow):
             self.homing_thread.start()
             self.read_json_data()
             self.is_ready = True
+            self.bit_thread = threading.Thread(None, self.r3d_load_daemon, daemon=True)
             self.xy_controller.io.set_digital_output(1, True)
         else:
             self.zaber_ascii_connection.close()
@@ -208,24 +210,25 @@ class Ui(QtWidgets.QMainWindow):
                 (self.positions["robomet_load"]["ypos"] - fuzz_factor_steps) <= (self.yaxis_steps) < (self.positions["robomet_load"]["ypos"] + fuzz_factor_steps) and
                 (self.positions["robomet_load"]["zpos"] - fuzz_factor_steps) <= (self.zaxis_steps) < (self.positions["robomet_load"]["zpos"] + fuzz_factor_steps)):
                 self.system_at_r3d_load = True
+                
             else:
                 self.system_at_r3d_load = False
-
+                
             # X-Z Handoff Position Check
             if ((self.positions["xz_transfer"]["xpos"] - fuzz_factor_steps) <= (self.xaxis_steps) < (self.positions["xz_transfer"]["xpos"] + fuzz_factor_steps) and 
                 (self.positions["xz_transfer"]["ypos"] - fuzz_factor_steps) <= (self.yaxis_steps) < (self.positions["xz_transfer"]["ypos"] + fuzz_factor_steps) and
                 (self.positions["xz_transfer"]["zpos"] - fuzz_factor_steps) <= (self.zaxis_steps) < (self.positions["xz_transfer"]["zpos"] + fuzz_factor_steps)):
-                self.system_at_xz_load = True
+                self.is_at_xz_load = True
             else:
-                self.system_at_xz_load = False
+                self.is_at_xz_load = False
 
             # SRAS Dropoff Position Check
             if ((self.positions["sras_load"]["xpos"] - fuzz_factor_steps) <= (self.xaxis_steps) < (self.positions["sras_load"]["xpos"] + fuzz_factor_steps) and 
                 (self.positions["sras_load"]["ypos"] - fuzz_factor_steps) <= (self.yaxis_steps) < (self.positions["sras_load"]["ypos"] + fuzz_factor_steps) and
                 (self.positions["sras_load"]["zpos"] - fuzz_factor_steps) <= (self.zaxis_steps) < (self.positions["sras_load"]["zpos"] + fuzz_factor_steps)):
-                self.system_at_xz_load = True
+                self.is_at_sras_load = True
             else:
-                self.system_at_xz_load = False
+                self.is_at_sras_load = False
 
             # Read Controller Input States
             self.xy_digi_inputs = self.xy_controller.io.get_all_digital_inputs()
@@ -263,8 +266,6 @@ class Ui(QtWidgets.QMainWindow):
             else:
                 self.label_sraserror_signal.setFont(QtGui.QFont("MS Shell Dlg 2", 8, QtGui.QFont.Medium))
             time.sleep(poll_delay_ms/1000)
-
-
         return
     
     def write_json_data(self):
@@ -322,19 +323,100 @@ class Ui(QtWidgets.QMainWindow):
 
     def toggle_auto_mode(self):
 
-        if(self.label_system_state.text() != "Auto Mode"):
+        if(self.is_in_automode == False):
+            self.is_in_automode = True
             self.label_system_state.setText("Auto Mode")
             self.auto_daemon_thread = threading.Thread(None, 
                                                         self.auto_mode_daemon,
                                                         daemon=True)
             self.auto_daemon_thread.start()
         else:
+            self.is_in_automode = False
             self.label_system_state.setText("Auto Mode Disabled")
 
+    def r3d_load_daemon(self):
+        while(self.is_in_automode == True):
+            if(self.system_at_r3d_load == True):
+                self.xy_controller.io.set_digital_output(2, True)
+            else:
+                self.xy_controller.io.set_digital_output(2, False)
+
+        
     def auto_mode_daemon(self):
-        while(self.label_system_state.text() == "Auto Mode"):
+        self.bit_thread.start()
+        while(self.is_in_automode == True):
             # wait for the robomet OK
+            # then move to the loading position
+            while(self.xy_digi_inputs[0] == False):
+                time.sleep(0.250)
+            if(self.xy_digi_inputs[0] == True):
+                self.label_system_state.setText("Request for SRAS. Moving to Load...")
+                self.x_axis.move_absolute(self.positions["robomet_load"]["xpos"])
+                self.y_axis.move_absolute(self.positions["robomet_load"]["ypos"])
+                self.z_axis.move_absolute(self.positions["robomet_load"]["zpos"])
+                self.label_system_state.setText("Waiting for All-Clear")
+            # Make sure the system is at the load position
+            while(self.xy_digi_inputs[1] == False):
+                time.sleep(0.250)
+            # Move to the XZ handoff position
+            if(self.xy_digi_inputs[1] == True):
+                self.label_system_state.setText("All-Clear recieved. Shuttling to XZ")
+                self.x_axis.move_absolute(self.positions["xz_transfer"]["xpos"])
+                self.y_axis.move_absolute(self.positions["xz_transfer"]["ypos"])
+                self.z_axis.move_absolute(self.positions["xz_transfer"]["zpos"])
+                time.sleep(0.250)
+            # Make sure the system is actually at the handoff position
+            while(self.is_at_xz_load == False):
+                time.sleep(0.250)
+            # Move to SRAS dropoff location
+            # TODO: Add gripper fire signal
+            if(self.is_at_xz_load == True):
+                self.label_system_state.setText("Shutting to SRAS System")
+                self.z_axis.move_absolute(0)
+                self.x_axis.move_absolute(self.positions["sras_load"]["xpos"])
+                self.y_axis.move_absolute(self.positions["sras_load"]["ypos"])
+                self.z_axis.move_absolute(self.positions["sras_load"]["zpos"])
+            # Make sure the system actually gets there
+            while(self.is_at_sras_load == False):
+                time.sleep(0.250)
+            # Idle scan
+            self.z_axis.move_absolute(0)
+            if(self.is_at_sras_load == True):
+                self.label_system_state.setText("SRAS Scan Running")
+            # Sleep for 10 s to simulate scan
+            time.sleep(10)
+            self.label_system_state.setText("Returning Sample...")
+            # Pick up the sample
+            self.y_axis.move_absolute(self.positions["sras_load"]["ypos"])
+            self.z_axis.move_absolute(self.positions["sras_load"]["zpos"])
+            time.sleep(0.5)
+            self.z_axis.move_absolute(0)
+
+            # move back to xz-handoff position
+            self.x_axis.move_absolute(self.positions["xz_transfer"]["xpos"])
+            self.y_axis.move_absolute(self.positions["xz_transfer"]["ypos"])
+            self.z_axis.move_absolute(self.positions["xz_transfer"]["zpos"])
+            # TODO: gripper shutdown
+            while(self.is_at_xz_load == False):
+                time.sleep(0.250)
+            if(self.is_at_xz_load == True):
+                self.z_axis.move_absolute(self.positions["robomet_load"]["zpos"])
+                self.y_axis.move_absolute(self.positions["robomet_load"]["ypos"])
+                self.x_axis.move_absolute(self.positions["robomet_load"]["xpos"])
+                
+            while(self.system_at_r3d_load == False):
+                time.sleep(0.250)
+            if(self.system_at_r3d_load == True):
+                self.xy_controller.io.set_digital_output(3, True)
+                time.sleep(1.0)
+                self.xy_controller.io.set_digital_output(3, False)
             
+            while(self.xy_digi_inputs[1] == True):
+                time.sleep(0.250)
+            
+            if(self.xy_digi_inputs[0] == False):
+                if(self.xy_digi_inputs[1] == False):
+                    self.x_axis.move_absolute(0)
         print("daemon shutting down...")
 
 app = QtWidgets.QApplication(sys.argv)
