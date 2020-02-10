@@ -197,6 +197,7 @@ class Ui(QtWidgets.QMainWindow):
             self.yaxis_counts.setText(self.yaxis_steps.__str__())
             self.zaxis_counts.setText(self.zaxis_steps.__str__())
 
+            breakpoint()
             # Homed position check
             if ((0 - fuzz_factor_steps <= (self.xaxis_steps) < 0 + fuzz_factor_steps) and
                 (0 - fuzz_factor_steps <= (self.yaxis_steps) < 0 + fuzz_factor_steps) and
