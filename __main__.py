@@ -403,7 +403,7 @@ class Ui(QtWidgets.QMainWindow):
                 self.z_axis.move_absolute(self.positions["robomet_load"]["zpos"])
                 self.y_axis.move_absolute(self.positions["robomet_load"]["ypos"])
                 self.x_axis.move_absolute(self.positions["robomet_load"]["xpos"])
-                
+                self.label_system_state.setText("Waiting for Robomet Pickup")
             while(self.system_at_r3d_load == False):
                 time.sleep(0.250)
             if(self.system_at_r3d_load == True):
@@ -416,7 +416,9 @@ class Ui(QtWidgets.QMainWindow):
             
             if(self.xy_digi_inputs[0] == False):
                 if(self.xy_digi_inputs[1] == False):
+                    time.sleep(5)
                     self.x_axis.move_absolute(0)
+            self.label_system_status.setText("Auto Mode. Waiting for Robomet.")
         print("daemon shutting down...")
 
 app = QtWidgets.QApplication(sys.argv)
